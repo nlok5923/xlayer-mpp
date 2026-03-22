@@ -10,6 +10,7 @@ import {
   ERC20_ABI,
   RPC_URLS,
   XLAYER_MAINNET_CHAIN_ID,
+  XLAYER_TESTNET_CHAIN_ID,
   type XLayerNetwork,
 } from "../constants.js";
 import type {
@@ -290,7 +291,7 @@ export class XLayerSessionClient {
       cumulativeAmount: cumulativeAmount.toString(),
       sequence,
       serverNonce: challenge.methodDetails.serverNonce,
-      chainId: XLAYER_MAINNET_CHAIN_ID,
+      chainId: this.network === "mainnet" ? XLAYER_MAINNET_CHAIN_ID : XLAYER_TESTNET_CHAIN_ID,
     };
   }
 }

@@ -102,15 +102,19 @@ export class ChannelStore {
   }
 
   /**
-   * Atomically deducts from the channel's remaining available balance.
+   * Atomically validates and applies an update voucher:
+   * - checks channel is open
+   * - checks sequence is strictly monotonic
+   * - checks new cumulativeAmount doesn't exceed deposit
+   * - updates both lastAuthorizedAmount and lastSequence in one write
    *
-   * "Available balance" = depositAmount - lastAuthorizedAmount.
-   * Throws if the new cumulativeAmount would exceed the deposited funds.
-   * This is a debit-check helper used during handleUpdate.
+   * All checks happen inside the mutex so concurrent requests for the same
+   * channel cannot both pass the sequence/balance guards.
    */
-  async deductFromChannel(
+  async authorizeUpdate(
     channelId: string,
-    newCumulativeAmount: bigint
+    newCumulativeAmount: bigint,
+    newSequence: number
   ): Promise<ChannelState> {
     const mutex = this.getMutex(channelId);
     return mutex.runExclusive(async () => {
@@ -118,6 +122,11 @@ export class ChannelStore {
       if (!state) throw new Error(`Channel not found: ${channelId}`);
       if (state.status !== "open") {
         throw new Error(`Channel ${channelId} is not open (status: ${state.status})`);
+      }
+      if (newSequence <= state.lastSequence) {
+        throw new Error(
+          `Non-monotonic sequence: got ${newSequence}, last was ${state.lastSequence}`
+        );
       }
       if (newCumulativeAmount > state.depositAmount) {
         throw new Error(
@@ -134,6 +143,7 @@ export class ChannelStore {
       const next: ChannelState = {
         ...state,
         lastAuthorizedAmount: newCumulativeAmount,
+        lastSequence: newSequence,
       };
       await this.store.set(channelKey(channelId), this.serialize(next));
       return next;

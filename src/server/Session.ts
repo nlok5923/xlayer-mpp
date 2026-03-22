@@ -163,26 +163,12 @@ export class XLayerSessionServer {
   private async handleUpdate(credential: SessionCredential): Promise<SessionReceipt> {
     const { voucher } = credential;
 
-    const state = await this.channelStore.getChannel(voucher.channelId);
-    if (!state) throw new Error(`Channel not found: ${voucher.channelId}`);
-    if (state.status !== "open") {
-      throw new Error(`Channel is not open (status: ${state.status})`);
-    }
-
-    if (voucher.sequence <= state.lastSequence) {
-      throw new Error(
-        `Non-monotonic sequence: got ${voucher.sequence}, last was ${state.lastSequence}`
-      );
-    }
-
-    const updated = await this.channelStore.deductFromChannel(
+    // sequence check + balance check + write all happen atomically inside the mutex
+    const updated = await this.channelStore.authorizeUpdate(
       voucher.channelId,
-      BigInt(voucher.cumulativeAmount)
+      BigInt(voucher.cumulativeAmount),
+      voucher.sequence
     );
-
-    await this.channelStore.updateChannel(voucher.channelId, {
-      lastSequence: voucher.sequence,
-    });
 
     return {
       channelId: voucher.channelId,

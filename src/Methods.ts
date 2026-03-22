@@ -94,7 +94,7 @@ export const SessionVoucherSchema = z.object({
   serverNonce: z.string(),
   /** Unix timestamp (seconds). Undefined means the voucher never expires. */
   expiresAt: z.number().int().optional(),
-  chainId: z.literal(196),
+  chainId: z.union([z.literal(196), z.literal(1952)]),
 });
 
 export type SessionVoucher = z.infer<typeof SessionVoucherSchema>;
