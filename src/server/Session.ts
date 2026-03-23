@@ -27,7 +27,7 @@ const DEFAULT_MAX_CHANNEL_DURATION = 7 * 24 * 60 * 60; // 7 days in seconds
 // ─── XLayerSessionServer ──────────────────────────────────────────────────────
 
 export class XLayerSessionServer {
-  private readonly config: Required<SessionConfig>;
+  private readonly config: Required<Omit<SessionConfig, "rpcUrl">> & Pick<SessionConfig, "rpcUrl">;
   private readonly channelStore: ChannelStore;
   private readonly publicClient: ReturnType<typeof createPublicClient>;
 
@@ -50,7 +50,7 @@ export class XLayerSessionServer {
 
     this.publicClient = createPublicClient({
       chain,
-      transport: http(RPC_URLS[network]),
+      transport: http(config.rpcUrl ?? RPC_URLS[network]),
     });
   }
 

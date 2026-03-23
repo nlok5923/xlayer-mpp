@@ -171,6 +171,7 @@ async function testSessionFlow(tokenAddress: Address) {
     recipient: serverAccount.address,
     acceptedAssets: [tokenAddress],
     network: "mainnet",
+    rpcUrl: ANVIL_RPC,
     store,
   });
 
@@ -182,8 +183,9 @@ async function testSessionFlow(tokenAddress: Address) {
     autoTopup: false,
   });
 
-  const depositAmount = parseUnits("10", 6); // 10 mUSDC deposit
-  const perRequest    = parseUnits("1", 6);  // 1 mUSDC per request
+  const perRequest = parseUnits("1", 6); // 1 mUSDC per request
+  // client is configured with depositMultiplier: 10, so it will deposit 10 mUSDC
+  // upfront and only authorise 1 mUSDC on the first voucher
 
   const serverBalanceBefore = await getTokenBalance(tokenAddress, serverAccount.address);
 
@@ -191,7 +193,7 @@ async function testSessionFlow(tokenAddress: Address) {
 
   const openChallenge = await server.createChallenge({ amount: "1" /* per-request */, asset: tokenAddress });
 
-  const openCredential = await client.handleChallenge(openChallenge, depositAmount);
+  const openCredential = await client.handleChallenge(openChallenge, perRequest);
   assert(openCredential.action === "open", "first credential is open");
 
   const openReceipt = await server.handleCredential(openChallenge, openCredential);
@@ -229,7 +231,8 @@ async function testSessionFlow(tokenAddress: Address) {
   const closeReceipt = await server.handleCredential(closeChallenge, closeCredential);
   console.log(`  Channel closed. Final authorizedAmount: ${formatUnits(BigInt(closeReceipt.authorizedAmount), 6)} mUSDC`);
 
-  assert(closeReceipt.authorizedAmount === (perRequest * 3n).toString(), "total authorized = 3 mUSDC");
+  // open voucher = 1 mUSDC + 3 updates × 1 mUSDC = 4 mUSDC total
+  assert(closeReceipt.authorizedAmount === (perRequest * 4n).toString(), "total authorized = 4 mUSDC");
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────

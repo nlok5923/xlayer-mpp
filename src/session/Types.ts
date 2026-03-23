@@ -72,4 +72,6 @@ export interface SessionConfig {
   store: Store;
   /** Maximum channel lifetime in seconds. Default: 7 days. */
   maxChannelDuration?: number;
+  /** Override the RPC URL (useful for local testing against Anvil). */
+  rpcUrl?: string;
 }

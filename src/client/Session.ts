@@ -48,6 +48,12 @@ export interface SessionClientConfig {
    * Default: false.
    */
   autoTopup?: boolean;
+  /**
+   * When auto-opening a channel, deposit this many times the request amount.
+   * E.g. 10 means deposit 10× upfront so the first N requests need no topup.
+   * Default: 10.
+   */
+  depositMultiplier?: number;
 }
 
 export class XLayerSessionClient {
@@ -56,6 +62,7 @@ export class XLayerSessionClient {
   private readonly network: XLayerNetwork;
   private readonly autoOpen: boolean;
   private readonly autoTopup: boolean;
+  private readonly depositMultiplier: bigint;
 
   /** In-memory channel state. A production client would persist this. */
   private channel: ClientChannelState | null = null;
@@ -65,6 +72,7 @@ export class XLayerSessionClient {
     this.network = config.network ?? "mainnet";
     this.autoOpen = config.autoOpen ?? true;
     this.autoTopup = config.autoTopup ?? false;
+    this.depositMultiplier = BigInt(config.depositMultiplier ?? 10);
 
     this.publicClient = createPublicClient({
       transport: http(config.rpcUrl ?? RPC_URLS[this.network]),
@@ -92,7 +100,10 @@ export class XLayerSessionClient {
           "No open channel. Enable autoOpen or call openChannel() manually."
         );
       }
-      return this.openChannel(challenge, requestAmount);
+      // Deposit multiplier × requestAmount upfront so subsequent requests
+      // don't need a topup immediately. First voucher only authorises requestAmount.
+      const depositAmount = requestAmount * this.depositMultiplier;
+      return this.openChannel(challenge, depositAmount, requestAmount);
     }
 
     // Check if the channel has enough remaining balance
@@ -114,12 +125,17 @@ export class XLayerSessionClient {
 
   /**
    * Opens a new payment channel by:
-   * 1. Broadcasting a deposit tx to transfer tokens to the server's address.
-   * 2. Signing an initial voucher (sequence 0, cumulativeAmount = requestAmount).
+   * 1. Broadcasting a deposit tx (`depositAmount` tokens → server).
+   * 2. Signing an initial voucher authorising only `firstRequestAmount`
+   *    (defaults to `depositAmount` when called manually without a separate amount).
+   *
+   * Keeping deposit > firstRequestAmount means subsequent update vouchers
+   * don't require an on-chain topup.
    */
   async openChannel(
     challenge: SessionChallenge,
-    initialDepositAmount: bigint
+    depositAmount: bigint,
+    firstRequestAmount: bigint = depositAmount
   ): Promise<SessionCredential> {
     const account = this.walletClient.account;
     if (!account) throw new Error("WalletClient must have an account");
@@ -134,7 +150,7 @@ export class XLayerSessionClient {
       data: encodeFunctionData({
         abi: ERC20_ABI,
         functionName: "transfer",
-        args: [recipient, initialDepositAmount],
+        args: [recipient, depositAmount],
       }),
       chain: this.walletClient.chain ?? null,
       value: 0n,
@@ -145,7 +161,9 @@ export class XLayerSessionClient {
 
     const channelId = challenge.channelId ?? crypto.randomUUID();
     const sequence = 0;
-    const cumulativeAmount = initialDepositAmount;
+    // First voucher only authorises this request — the rest of the deposit
+    // is reserved for future update vouchers.
+    const cumulativeAmount = firstRequestAmount;
 
     const voucher = this.buildVoucher(
       challenge,
@@ -163,7 +181,7 @@ export class XLayerSessionClient {
       recipient,
       cumulativeAmount,
       sequence,
-      depositAmount: initialDepositAmount,
+      depositAmount,
     };
 
     return {
