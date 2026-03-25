@@ -160,7 +160,7 @@ export const PAYMENT_CHANNEL_ABI = [
  * For local Anvil testing, the contract is deployed fresh each run.
  */
 export const PAYMENT_CHANNEL_ADDRESS: Record<XLayerNetwork, Address> = {
-  mainnet: "0x0000000000000000000000000000000000000000",
+  mainnet: "0x5f24b97e061d3FCe1E87A44be91a543Ef85Dfc89",
   testnet: "0x0000000000000000000000000000000000000000",
 };
 

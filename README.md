@@ -47,6 +47,7 @@ One AI agent pays another for a subtask — fully autonomous, settling in USDC o
 | Gas token | OKB | OKB |
 | RPC | `https://rpc.xlayer.tech` | `https://testrpc.xlayer.tech/terigon` |
 | USDC | `0x74b7F16337b8972027F6196A17a631aC6dE26d22` | — |
+| XLayerMPPChannel | `0x5f24b97e061d3FCe1E87A44be91a543Ef85Dfc89` | — |
 | Explorer | [okx.com/web3/explorer/xlayer](https://www.okx.com/web3/explorer/xlayer) | — |
 
 > **Gas model (pull mode):** The server holds a funded signer key and broadcasts transactions, paying OKB gas. Clients only need to hold USDC — the payment token. No OKB required on the client side.
