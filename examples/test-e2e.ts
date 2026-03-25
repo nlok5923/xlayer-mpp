@@ -3,9 +3,9 @@
  *
  * Prerequisites:
  *   1. Install Foundry:  curl -L https://foundry.paradigm.xyz | bash && foundryup
- *   2. Compile the mock:  forge build --contracts contracts/ --out artifacts/
+ *   2. Compile contracts: forge build --contracts contracts/ --out artifacts/
  *   3. Start Anvil:       anvil
- *   4. Run this script:   npx ts-node --esm examples/test-e2e.ts
+ *   4. Run this script:   npx tsx examples/test-e2e.ts
  *
  * Anvil starts with 10 pre-funded accounts (10 000 ETH each).
  * We use account[0] as the server signer and account[1] as the client.
@@ -14,7 +14,6 @@
 import {
   createPublicClient,
   createWalletClient,
-  createTestClient,
   http,
   parseUnits,
   formatUnits,
@@ -51,12 +50,11 @@ const anvilChain = {
 } as const;
 
 const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
-const testClient   = createTestClient({ chain: anvilChain, transport: http(ANVIL_RPC), mode: "anvil" });
 
 const serverWallet = createWalletClient({ account: serverAccount, chain: anvilChain, transport: http(ANVIL_RPC) });
 const clientWallet = createWalletClient({ account: clientAccount, chain: anvilChain, transport: http(ANVIL_RPC) });
 
-// ─── Load compiled MockERC20 artifact ─────────────────────────────────────────
+// ─── Load compiled artifacts ──────────────────────────────────────────────────
 
 function loadArtifact(name: string) {
   const path = resolve(`artifacts/${name}.sol/${name}.json`);
@@ -64,22 +62,29 @@ function loadArtifact(name: string) {
   return JSON.parse(raw) as { abi: unknown[]; bytecode: { object: string } };
 }
 
-// ─── Deploy MockERC20 ─────────────────────────────────────────────────────────
+// ─── Deploy helpers ───────────────────────────────────────────────────────────
 
 async function deployMockERC20(mintTo: Address, supply: bigint): Promise<Address> {
   const artifact = loadArtifact("MockERC20");
   const abi      = artifact.abi as Parameters<typeof serverWallet.deployContract>[0]["abi"];
   const bytecode = artifact.bytecode.object as Hex;
 
-  const hash = await serverWallet.deployContract({
-    abi,
-    bytecode,
-    args: [mintTo, supply],
-  });
-
+  const hash = await serverWallet.deployContract({ abi, bytecode, args: [mintTo, supply] });
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   const address = receipt.contractAddress!;
   console.log(`  MockERC20 deployed at ${address}`);
+  return address;
+}
+
+async function deployChannelContract(): Promise<Address> {
+  const artifact = loadArtifact("XLayerMPPChannel");
+  const abi      = artifact.abi as Parameters<typeof serverWallet.deployContract>[0]["abi"];
+  const bytecode = artifact.bytecode.object as Hex;
+
+  const hash = await serverWallet.deployContract({ abi, bytecode, args: [] });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  const address = receipt.contractAddress!;
+  console.log(`  XLayerMPPChannel deployed at ${address}`);
   return address;
 }
 
@@ -107,11 +112,10 @@ async function testChargeFlow(tokenAddress: Address) {
 
   const store = createMemoryStore();
 
-  // Server: override network to "mainnet" shape but point RPC at Anvil
   const server = new XLayerChargeServer({
     signerPrivateKey: SERVER_PRIVATE_KEY,
     store,
-    network: "mainnet", // only used for chain shape — RPC is overridden below
+    network: "mainnet",
     rpcUrl: ANVIL_RPC,
   });
 
@@ -125,7 +129,7 @@ async function testChargeFlow(tokenAddress: Address) {
 
   // 1. Server issues challenge
   const challenge = await server.createChallenge({
-    amount: "1",          // 1 token (6 decimals)
+    amount: "1",
     currency: "USDC",
     recipient: serverAccount.address,
   });
@@ -162,8 +166,8 @@ async function testChargeFlow(tokenAddress: Address) {
 
 // ─── Test: Session flow ───────────────────────────────────────────────────────
 
-async function testSessionFlow(tokenAddress: Address) {
-  console.log("\n── Session flow ─────────────────────────────────────────────────");
+async function testSessionFlow(tokenAddress: Address, channelContractAddress: Address) {
+  console.log("\n── Session flow (on-chain escrow via XLayerMPPChannel) ──────────");
 
   const store = createMemoryStore();
 
@@ -173,6 +177,8 @@ async function testSessionFlow(tokenAddress: Address) {
     network: "mainnet",
     rpcUrl: ANVIL_RPC,
     store,
+    channelContractAddress,
+    signerPrivateKey: SERVER_PRIVATE_KEY,
   });
 
   const client = new XLayerSessionClient({
@@ -181,17 +187,18 @@ async function testSessionFlow(tokenAddress: Address) {
     rpcUrl: ANVIL_RPC,
     autoOpen: true,
     autoTopup: false,
+    channelContractAddress,
   });
 
   const perRequest = parseUnits("1", 6); // 1 mUSDC per request
-  // client is configured with depositMultiplier: 10, so it will deposit 10 mUSDC
-  // upfront and only authorise 1 mUSDC on the first voucher
+  // depositMultiplier: 10 (default) → deposits 10 mUSDC upfront
 
   const serverBalanceBefore = await getTokenBalance(tokenAddress, serverAccount.address);
+  const clientBalanceBefore = await getTokenBalance(tokenAddress, clientAccount.address);
 
   // ── Open ────────────────────────────────────────────────────────────────────
 
-  const openChallenge = await server.createChallenge({ amount: "1" /* per-request */, asset: tokenAddress });
+  const openChallenge = await server.createChallenge({ amount: "1", asset: tokenAddress });
 
   const openCredential = await client.handleChallenge(openChallenge, perRequest);
   assert(openCredential.action === "open", "first credential is open");
@@ -199,6 +206,10 @@ async function testSessionFlow(tokenAddress: Address) {
   const openReceipt = await server.handleCredential(openChallenge, openCredential);
   console.log(`  Channel opened: ${openReceipt.channelId}`);
   assert(!!openReceipt.channelId, "channel ID returned");
+
+  // Escrow holds the deposit (10 mUSDC locked in contract)
+  const escrowBalance = await getTokenBalance(tokenAddress, channelContractAddress);
+  assert(escrowBalance === perRequest * 10n, "contract holds 10 mUSDC in escrow");
 
   // ── Update (3 requests) ──────────────────────────────────────────────────
 
@@ -217,7 +228,7 @@ async function testSessionFlow(tokenAddress: Address) {
     console.log(`  Request ${i}: authorizedAmount = ${formatUnits(BigInt(updateReceipt.authorizedAmount), 6)} mUSDC`);
   }
 
-  // ── Close ────────────────────────────────────────────────────────────────
+  // ── Close + on-chain settle ──────────────────────────────────────────────
 
   const closeChallenge = await server.createChallenge({
     channelId: openReceipt.channelId,
@@ -229,10 +240,23 @@ async function testSessionFlow(tokenAddress: Address) {
   assert(closeCredential.action === "close", "close credential action");
 
   const closeReceipt = await server.handleCredential(closeChallenge, closeCredential);
-  console.log(`  Channel closed. Final authorizedAmount: ${formatUnits(BigInt(closeReceipt.authorizedAmount), 6)} mUSDC`);
+  console.log(`  Channel settled on-chain. settleTxHash: ${closeReceipt.settleTxHash}`);
+  console.log(`  Final authorizedAmount: ${formatUnits(BigInt(closeReceipt.authorizedAmount), 6)} mUSDC`);
 
-  // open voucher = 1 mUSDC + 3 updates × 1 mUSDC = 4 mUSDC total
+  // open voucher (1) + 3 updates = 4 mUSDC total
   assert(closeReceipt.authorizedAmount === (perRequest * 4n).toString(), "total authorized = 4 mUSDC");
+  assert(!!closeReceipt.settleTxHash, "settleTxHash is present");
+
+  // After settle: server got 4 mUSDC, client got 6 mUSDC refund
+  const serverBalanceAfter = await getTokenBalance(tokenAddress, serverAccount.address);
+  const clientBalanceAfter = await getTokenBalance(tokenAddress, clientAccount.address);
+
+  assert(serverBalanceAfter === serverBalanceBefore + perRequest * 4n, "server received 4 mUSDC");
+  assert(clientBalanceAfter === clientBalanceBefore - perRequest * 4n, "client net cost = 4 mUSDC (6 refunded)");
+
+  // Escrow should be empty after settlement
+  const escrowAfter = await getTokenBalance(tokenAddress, channelContractAddress);
+  assert(escrowAfter === 0n, "contract escrow is empty after settlement");
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
@@ -251,14 +275,16 @@ async function main() {
   }
 
   // Deploy mock token — mint 1000 mUSDC to client
-  console.log("\n── Deploy MockERC20 ──────────────────────────────────────────────");
+  console.log("\n── Deploy contracts ──────────────────────────────────────────────");
   const supply = parseUnits("1000", 6);
   const tokenAddress = await deployMockERC20(clientAccount.address, supply);
+  const channelContractAddress = await deployChannelContract();
+
   const clientBalance = await getTokenBalance(tokenAddress, clientAccount.address);
   assert(clientBalance === supply, `client holds ${formatUnits(supply, 6)} mUSDC`);
 
   await testChargeFlow(tokenAddress);
-  await testSessionFlow(tokenAddress);
+  await testSessionFlow(tokenAddress, channelContractAddress);
 
   console.log("\n✓ All tests passed\n");
 }

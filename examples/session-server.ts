@@ -30,6 +30,10 @@ const server = new XLayerSessionServer({
   network: "testnet",
   store,
   maxChannelDuration: 24 * 60 * 60, // 1 day
+  // Deployed XLayerMPPChannel contract address (deploy once, reuse)
+  channelContractAddress: "0xYOUR_CHANNEL_CONTRACT_ADDRESS",
+  // Server signer key — pays gas for settle() calls; must match recipient address
+  signerPrivateKey: "0xYOUR_SERVER_PRIVATE_KEY",
 });
 
 // ─── Step 1: Issue a 402 challenge ───────────────────────────────────────────
@@ -57,7 +61,7 @@ const openCredential: SessionCredential = {
     cumulativeAmount: "10000000", // 10 USDC deposit (6 decimals)
     sequence: 0,
     serverNonce: challenge.methodDetails.serverNonce,
-    chainId: 1952, // testnet
+    chainId: 1952,
   },
   signature: "0xEIP712_SIGNATURE_FROM_CLIENT",
 };

@@ -41,6 +41,16 @@ export const ERC20_ABI = [
   },
   {
     type: "function",
+    name: "approve",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
     name: "balanceOf",
     stateMutability: "view",
     inputs: [{ name: "account", type: "address" }],
@@ -63,6 +73,96 @@ export const ERC20_ABI = [
     ],
   },
 ] as const satisfies Abi;
+
+// ─── XLayerMPPChannel Contract ABI ───────────────────────────────────────────
+
+export const PAYMENT_CHANNEL_ABI = [
+  {
+    type: "function",
+    name: "open",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "channelId", type: "string" },
+      { name: "recipient", type: "address" },
+      { name: "asset", type: "address" },
+      { name: "depositAmount", type: "uint256" },
+      { name: "expiresAt", type: "uint64" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "topup",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "channelId", type: "string" },
+      { name: "additionalAmount", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "settle",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "channelId", type: "string" },
+      { name: "cumulativeAmount", type: "uint256" },
+      { name: "sequence", type: "uint256" },
+      { name: "serverNonce", type: "string" },
+      { name: "expiresAt", type: "uint256" },
+      { name: "chainId", type: "uint256" },
+      { name: "payerSig", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "expire",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "channelId", type: "string" }],
+    outputs: [],
+  },
+  {
+    type: "event",
+    name: "ChannelOpened",
+    inputs: [
+      { name: "channelKey", type: "bytes32", indexed: true },
+      { name: "channelId", type: "string", indexed: false },
+      { name: "payer", type: "address", indexed: true },
+      { name: "recipient", type: "address", indexed: true },
+      { name: "asset", type: "address", indexed: false },
+      { name: "depositAmount", type: "uint256", indexed: false },
+      { name: "expiresAt", type: "uint64", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "ChannelToppedUp",
+    inputs: [
+      { name: "channelKey", type: "bytes32", indexed: true },
+      { name: "additionalAmount", type: "uint256", indexed: false },
+      { name: "newDepositAmount", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "ChannelSettled",
+    inputs: [
+      { name: "channelKey", type: "bytes32", indexed: true },
+      { name: "settledAmount", type: "uint256", indexed: false },
+      { name: "refundAmount", type: "uint256", indexed: false },
+    ],
+  },
+] as const satisfies Abi;
+
+/**
+ * Placeholder addresses — replace with actual deployed contract addresses.
+ * For local Anvil testing, the contract is deployed fresh each run.
+ */
+export const PAYMENT_CHANNEL_ADDRESS: Record<XLayerNetwork, Address> = {
+  mainnet: "0x0000000000000000000000000000000000000000",
+  testnet: "0x0000000000000000000000000000000000000000",
+};
 
 // ─── EIP-712 Domain ───────────────────────────────────────────────────────────
 

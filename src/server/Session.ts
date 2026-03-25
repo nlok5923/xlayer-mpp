@@ -1,13 +1,15 @@
 import {
   createPublicClient,
+  createWalletClient,
   decodeEventLog,
+  encodeFunctionData,
   http,
-  parseUnits,
   type Address,
   type Hex,
 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import {
-  ERC20_ABI,
+  PAYMENT_CHANNEL_ABI,
   RPC_URLS,
   XLAYER_MAINNET_CHAIN_ID,
   XLAYER_TESTNET_CHAIN_ID,
@@ -30,6 +32,8 @@ export class XLayerSessionServer {
   private readonly config: Required<Omit<SessionConfig, "rpcUrl">> & Pick<SessionConfig, "rpcUrl">;
   private readonly channelStore: ChannelStore;
   private readonly publicClient: ReturnType<typeof createPublicClient>;
+  private readonly signerWallet: ReturnType<typeof createWalletClient>;
+  private readonly chainId: number;
 
   constructor(config: SessionConfig) {
     this.config = {
@@ -39,18 +43,25 @@ export class XLayerSessionServer {
     this.channelStore = new ChannelStore(config.store);
 
     const network = config.network;
-    const chainId =
+    this.chainId =
       network === "mainnet" ? XLAYER_MAINNET_CHAIN_ID : XLAYER_TESTNET_CHAIN_ID;
+
     const chain = {
-      id: chainId,
+      id: this.chainId,
       name: network === "mainnet" ? "XLayer" : "XLayer Testnet",
       nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
       rpcUrls: { default: { http: [RPC_URLS[network]] } },
     } as const;
 
-    this.publicClient = createPublicClient({
+    const transport = http(config.rpcUrl ?? RPC_URLS[network]);
+
+    this.publicClient = createPublicClient({ chain, transport });
+
+    const signerAccount = privateKeyToAccount(config.signerPrivateKey);
+    this.signerWallet = createWalletClient({
+      account: signerAccount,
       chain,
-      transport: http(config.rpcUrl ?? RPC_URLS[network]),
+      transport,
     });
   }
 
@@ -58,8 +69,7 @@ export class XLayerSessionServer {
 
   /**
    * Generates an HTTP 402 session challenge.
-   * `amount` is the per-request cost in the token's smallest unit as a
-   * decimal string (e.g. "1000000" for 1 USDC with 6 decimals).
+   * `amount` is the per-request cost as a decimal string (e.g. "0.01" for 0.01 USDC).
    */
   async createChallenge(params: {
     channelId?: string;
@@ -80,8 +90,9 @@ export class XLayerSessionServer {
       amount: params.amount,
       methodDetails: {
         network: this.config.network,
-        channelProgram: "offchain-eip712",
+        channelProgram: "onchain-eip712",
         serverNonce,
+        contractAddress: this.config.channelContractAddress,
       },
     };
   }
@@ -93,7 +104,6 @@ export class XLayerSessionServer {
     credential: SessionCredential
   ): Promise<SessionReceipt> {
     const { voucher, action } = credential;
-    // The Zod schema validates the 0x-prefix; cast to viem's branded Hex type.
     const signature = credential.signature as Hex;
 
     this.validateVoucherMeta(challenge, voucher);
@@ -125,10 +135,8 @@ export class XLayerSessionServer {
       throw new Error("depositTxHash is required for action 'open'");
     }
 
-    const depositAmount = await this.verifyDepositTx(
+    const depositAmount = await this.verifyOpenTx(
       depositTxHash as Hex,
-      voucher.asset as Address,
-      this.config.recipient,
       voucher.channelId
     );
 
@@ -163,7 +171,6 @@ export class XLayerSessionServer {
   private async handleUpdate(credential: SessionCredential): Promise<SessionReceipt> {
     const { voucher } = credential;
 
-    // sequence check + balance check + write all happen atomically inside the mutex
     const updated = await this.channelStore.authorizeUpdate(
       voucher.channelId,
       BigInt(voucher.cumulativeAmount),
@@ -184,10 +191,8 @@ export class XLayerSessionServer {
       throw new Error("depositTxHash is required for action 'topup'");
     }
 
-    const additionalDeposit = await this.verifyDepositTx(
+    const additionalDeposit = await this.verifyTopupTx(
       depositTxHash as Hex,
-      voucher.asset as Address,
-      this.config.recipient,
       voucher.channelId
     );
 
@@ -205,8 +210,13 @@ export class XLayerSessionServer {
     };
   }
 
+  /**
+   * Closes the channel by calling contract.settle() on-chain.
+   * Transfers the authorised amount to the recipient and refunds the remainder
+   * to the payer — all from the contract's escrow.
+   */
   private async handleClose(credential: SessionCredential): Promise<SessionReceipt> {
-    const { voucher } = credential;
+    const { voucher, signature } = credential;
 
     const updated = await this.channelStore.updateChannel(voucher.channelId, {
       status: "closing",
@@ -214,10 +224,39 @@ export class XLayerSessionServer {
       lastSequence: voucher.sequence,
     });
 
+    // Broadcast settle() to the channel contract
+    const account = this.signerWallet.account;
+    if (!account) throw new Error("Signer wallet must have an account");
+
+    const settleTxHash = await this.signerWallet.sendTransaction({
+      account,
+      to: this.config.channelContractAddress as Address,
+      data: encodeFunctionData({
+        abi: PAYMENT_CHANNEL_ABI,
+        functionName: "settle",
+        args: [
+          voucher.channelId,
+          BigInt(voucher.cumulativeAmount),
+          BigInt(voucher.sequence),
+          voucher.serverNonce,
+          BigInt(voucher.expiresAt ?? 0),
+          BigInt(voucher.chainId),
+          signature as Hex,
+        ],
+      }),
+      chain: this.signerWallet.chain ?? null,
+      value: 0n,
+    });
+
+    await this.publicClient.waitForTransactionReceipt({ hash: settleTxHash });
+
+    await this.channelStore.updateChannel(voucher.channelId, { status: "closed" });
+
     return {
       channelId: voucher.channelId,
       sequence: voucher.sequence,
       authorizedAmount: updated.lastAuthorizedAmount.toString(),
+      settleTxHash,
     };
   }
 
@@ -256,48 +295,48 @@ export class XLayerSessionServer {
   }
 
   private async verifySignature(voucher: SessionVoucher, signature: Hex): Promise<void> {
-    const valid = await verifyVoucher(voucher, signature, voucher.payer as Address);
+    const valid = await verifyVoucher(
+      voucher,
+      signature,
+      voucher.payer as Address,
+      this.config.channelContractAddress as Address
+    );
     if (!valid) {
       throw new Error("Invalid EIP-712 voucher signature");
     }
   }
 
   /**
-   * Fetches the deposit transaction receipt and confirms a Transfer event
-   * whose `to` matches the server's recipient.
-   * Returns the transferred amount in token base units.
-   *
-   * Note: the `channelId` parameter is intentionally not on-chain; it is only
-   * used for logging / error context. The actual deposit verification is purely
-   * balance-based (token Transfer event).
+   * Verifies a channel open transaction by checking for a ChannelOpened event
+   * emitted by the XLayerMPPChannel contract. Returns the deposited amount.
    */
-  private async verifyDepositTx(
+  private async verifyOpenTx(
     txHash: Hex,
-    asset: Address,
-    recipient: Address,
-    _channelId: string
+    channelId: string
   ): Promise<bigint> {
     const receipt = await this.publicClient.waitForTransactionReceipt({
       hash: txHash,
     });
 
     if (receipt.status !== "success") {
-      throw new Error(`Deposit transaction reverted: ${txHash}`);
+      throw new Error(`Open transaction reverted: ${txHash}`);
     }
 
+    const contractAddress = this.config.channelContractAddress.toLowerCase();
+
     for (const log of receipt.logs) {
-      if (log.address.toLowerCase() !== asset.toLowerCase()) continue;
+      if (log.address.toLowerCase() !== contractAddress) continue;
 
       try {
         const decoded = decodeEventLog({
-          abi: ERC20_ABI,
-          eventName: "Transfer",
+          abi: PAYMENT_CHANNEL_ABI,
+          eventName: "ChannelOpened",
           data: log.data,
           topics: log.topics,
         });
 
-        if (decoded.args.to.toLowerCase() === recipient.toLowerCase()) {
-          return decoded.args.value;
+        if (decoded.args.channelId === channelId) {
+          return decoded.args.depositAmount;
         }
       } catch {
         continue;
@@ -305,7 +344,45 @@ export class XLayerSessionServer {
     }
 
     throw new Error(
-      `No Transfer event found for recipient ${recipient} in tx ${txHash}`
+      `No ChannelOpened event found for channelId ${channelId} in tx ${txHash}`
     );
+  }
+
+  /**
+   * Verifies a channel top-up transaction by checking for a ChannelToppedUp event.
+   * Returns the additional deposited amount.
+   */
+  private async verifyTopupTx(
+    txHash: Hex,
+    _channelId: string
+  ): Promise<bigint> {
+    const receipt = await this.publicClient.waitForTransactionReceipt({
+      hash: txHash,
+    });
+
+    if (receipt.status !== "success") {
+      throw new Error(`Topup transaction reverted: ${txHash}`);
+    }
+
+    const contractAddress = this.config.channelContractAddress.toLowerCase();
+
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== contractAddress) continue;
+
+      try {
+        const decoded = decodeEventLog({
+          abi: PAYMENT_CHANNEL_ABI,
+          eventName: "ChannelToppedUp",
+          data: log.data,
+          topics: log.topics,
+        });
+
+        return decoded.args.additionalAmount;
+      } catch {
+        continue;
+      }
+    }
+
+    throw new Error(`No ChannelToppedUp event found in tx ${txHash}`);
   }
 }

@@ -29,10 +29,11 @@ export const SESSION_VOUCHER_TYPES = {
 
 // ─── Domain Builder ───────────────────────────────────────────────────────────
 
-function buildDomain(chainId: number = XLAYER_MAINNET_CHAIN_ID) {
+function buildDomain(chainId: number = XLAYER_MAINNET_CHAIN_ID, verifyingContract?: Address) {
   return {
     ...EIP712_DOMAIN_BASE,
     chainId,
+    ...(verifyingContract ? { verifyingContract } : {}),
   } as const;
 }
 
@@ -65,7 +66,9 @@ function voucherToMessage(voucher: SessionVoucher) {
  */
 export async function signVoucher(
   voucher: SessionVoucher,
-  walletClient: WalletClient
+  walletClient: WalletClient,
+  /** Include the contract address in the EIP-712 domain for on-chain verification. */
+  contractAddress?: Address
 ): Promise<Hex> {
   if (!walletClient.account) {
     throw new Error("WalletClient must have an account to sign vouchers");
@@ -73,7 +76,7 @@ export async function signVoucher(
 
   return walletClient.signTypedData({
     account: walletClient.account,
-    domain: buildDomain(voucher.chainId),
+    domain: buildDomain(voucher.chainId, contractAddress),
     types: SESSION_VOUCHER_TYPES,
     primaryType: "SessionVoucher",
     message: voucherToMessage(voucher),
@@ -90,7 +93,9 @@ export async function signVoucher(
 export async function verifyVoucher(
   voucher: SessionVoucher,
   signature: Hex,
-  expectedPayer: Address
+  expectedPayer: Address,
+  /** Must match the contractAddress used during signing for on-chain verification. */
+  contractAddress?: Address
 ): Promise<boolean> {
   // Reject expired vouchers before bothering with crypto
   if (voucher.expiresAt !== undefined) {
@@ -104,7 +109,7 @@ export async function verifyVoucher(
     // verifyTypedData in viem v2 is async
     const valid = await verifyTypedData({
       address: expectedPayer,
-      domain: buildDomain(voucher.chainId),
+      domain: buildDomain(voucher.chainId, contractAddress),
       types: SESSION_VOUCHER_TYPES,
       primaryType: "SessionVoucher",
       message: voucherToMessage(voucher),

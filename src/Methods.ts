@@ -70,9 +70,11 @@ export const SessionChallengeSchema = z.object({
   amount: z.string(),
   methodDetails: z.object({
     network: NetworkSchema,
-    channelProgram: z.literal("offchain-eip712"),
+    channelProgram: z.string(),
     /** Server-generated nonce to bind credential to this challenge. */
     serverNonce: z.string(),
+    /** Address of the deployed XLayerMPPChannel escrow contract. */
+    contractAddress: HexAddress,
   }),
 });
 
@@ -94,7 +96,7 @@ export const SessionVoucherSchema = z.object({
   serverNonce: z.string(),
   /** Unix timestamp (seconds). Undefined means the voucher never expires. */
   expiresAt: z.number().int().optional(),
-  chainId: z.union([z.literal(196), z.literal(1952)]),
+  chainId: z.number().int().positive(),
 });
 
 export type SessionVoucher = z.infer<typeof SessionVoucherSchema>;
@@ -115,6 +117,8 @@ export const SessionReceiptSchema = z.object({
   sequence: z.number().int().nonnegative(),
   /** Total amount the server is authorised to settle, as a decimal string. */
   authorizedAmount: z.string(),
+  /** On-chain settlement tx hash (present after server calls contract.settle()). */
+  settleTxHash: HexString.optional(),
 });
 
 export type SessionReceipt = z.infer<typeof SessionReceiptSchema>;

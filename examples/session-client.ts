@@ -39,6 +39,8 @@ const client = new XLayerSessionClient({
   network: "testnet",
   autoOpen: true,   // automatically open a channel on first challenge
   autoTopup: false, // require explicit topup when balance runs out
+  // Deployed XLayerMPPChannel contract (can also be read from challenge.methodDetails.contractAddress)
+  channelContractAddress: "0xYOUR_CHANNEL_CONTRACT_ADDRESS",
 });
 
 // ─── Simulate first 402 challenge (no channel yet) ───────────────────────────
@@ -49,8 +51,9 @@ const firstChallenge: SessionChallenge = {
   amount: "0.01",
   methodDetails: {
     network: "testnet",
-    channelProgram: "offchain-eip712",
+    channelProgram: "onchain-eip712",
     serverNonce: "nonce-abc-001",
+    contractAddress: "0xYOUR_CHANNEL_CONTRACT_ADDRESS",
   },
 };
 
@@ -71,8 +74,9 @@ const secondChallenge: SessionChallenge = {
   amount: "0.01",
   methodDetails: {
     network: "testnet",
-    channelProgram: "offchain-eip712",
+    channelProgram: "onchain-eip712",
     serverNonce: "nonce-abc-002", // fresh nonce per challenge
+    contractAddress: "0xYOUR_CHANNEL_CONTRACT_ADDRESS",
   },
 };
 
@@ -89,8 +93,9 @@ const closeChallenge: SessionChallenge = {
   amount: "0",
   methodDetails: {
     network: "testnet",
-    channelProgram: "offchain-eip712",
+    channelProgram: "onchain-eip712",
     serverNonce: "nonce-abc-003",
+    contractAddress: "0xYOUR_CHANNEL_CONTRACT_ADDRESS",
   },
 };
 

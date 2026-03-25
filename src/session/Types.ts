@@ -66,7 +66,7 @@ export interface AuthorizeUpdateInput {
 export interface SessionConfig {
   /** Token addresses the server will accept for settlement. */
   acceptedAssets: Address[];
-  /** Server's settlement address (receives funds on claim). */
+  /** Server's settlement address (receives funds on claim). Must match the private key below. */
   recipient: Address;
   network: XLayerNetwork;
   store: Store;
@@ -74,4 +74,8 @@ export interface SessionConfig {
   maxChannelDuration?: number;
   /** Override the RPC URL (useful for local testing against Anvil). */
   rpcUrl?: string;
+  /** Address of the deployed XLayerMPPChannel escrow contract. */
+  channelContractAddress: Address;
+  /** Server signer private key — used to broadcast settle() and covers gas costs. */
+  signerPrivateKey: `0x${string}`;
 }

@@ -7,6 +7,8 @@ export {
   BLOCK_EXPLORER_URL,
   ERC20_ABI,
   EIP712_DOMAIN_BASE,
+  PAYMENT_CHANNEL_ABI,
+  PAYMENT_CHANNEL_ADDRESS,
 } from "./constants.js";
 export type { XLayerNetwork } from "./constants.js";
 
