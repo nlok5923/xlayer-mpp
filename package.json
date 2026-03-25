@@ -14,7 +14,9 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "test:e2e": "tsx examples/test-e2e.ts"
+    "test:e2e": "tsx examples/test-e2e.ts",
+    "demo:mainnet": "tsx examples/demo-mainnet.ts",
+    "demo:testnet": "tsx examples/demo-testnet.ts"
   },
   "dependencies": {
     "async-mutex": "^0.5.0",
