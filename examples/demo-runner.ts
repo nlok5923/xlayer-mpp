@@ -7,14 +7,13 @@ import {
   createPublicClient,
   createWalletClient,
   formatUnits,
-  generatePrivateKey,
   http,
   parseUnits,
   type Address,
   type Chain,
   type Hex,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 
