@@ -1,6 +1,16 @@
 /**
  * Shared demo runner for @xlayer/mpp.
  * Called by demo-mainnet.ts and demo-testnet.ts with network-specific config.
+ *
+ * Scenario
+ * --------
+ * An autonomous DeFi agent needs market intelligence from the XLayer DeFi
+ * Oracle API. Instead of API keys or subscriptions, it pays per query using
+ * USDC on XLayer — powered by MPP (Machine Payments Protocol).
+ *
+ *   Scenario 1 — Spot Signal  : one-off request, pay-per-call via HTTP 402
+ *   Scenario 2 — Price Stream : open a metered channel, stream price ticks
+ *                                with off-chain EIP-712 signatures, settle once
  */
 
 import {
@@ -27,12 +37,11 @@ import type { XLayerNetwork } from "../src/constants.js";
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 export interface DemoConfig {
-  network:         XLayerNetwork;
-  chain:           Chain;
-  rpcUrl:          string;
-  explorerUrl:     string;
-  serverKey:       Hex;
-  /** Pre-deployed contract address. If not provided, the script deploys it. */
+  network:          XLayerNetwork;
+  chain:            Chain;
+  rpcUrl:           string;
+  explorerUrl:      string;
+  serverKey:        Hex;
   channelContract?: Address;
 }
 
@@ -41,6 +50,7 @@ export interface DemoConfig {
 const C = {
   reset:   "\x1b[0m",
   bold:    "\x1b[1m",
+  dim:     "\x1b[2m",
   green:   "\x1b[32m",
   yellow:  "\x1b[33m",
   blue:    "\x1b[34m",
@@ -62,27 +72,48 @@ function header(title: string) {
   sep();
 }
 
-function step(n: number | string, msg: string) {
-  console.log(`\n${C.bold}${C.blue}  [${n}]${C.reset} ${C.white}${msg}${C.reset}`);
+function step(label: string, msg: string) {
+  console.log(`\n${C.bold}${C.blue}  [${label}]${C.reset}  ${C.white}${msg}${C.reset}`);
 }
 
-function ok(msg: string)   { console.log(`${C.green}      ✓  ${msg}${C.reset}`); }
-function info(msg: string) { console.log(`${C.gray}      →  ${msg}${C.reset}`); }
-function warn(msg: string) { console.log(`${C.yellow}      ⚠  ${msg}${C.reset}`); }
+function ok(msg: string)     { console.log(`${C.green}         ✓  ${msg}${C.reset}`); }
+function info(msg: string)   { console.log(`${C.gray}         →  ${msg}${C.reset}`); }
+function warn(msg: string)   { console.log(`${C.yellow}         ⚠  ${msg}${C.reset}`); }
+function agent(msg: string)  { console.log(`${C.magenta}  agent   ›  ${msg}${C.reset}`); }
+function oracle(msg: string) { console.log(`${C.cyan}  oracle  ›  ${msg}${C.reset}`); }
 
 function kv(key: string, val: string) {
-  console.log(`${C.gray}      ${key.padEnd(22)}${C.reset}${C.cyan}${val}${C.reset}`);
+  console.log(`${C.gray}         ${key.padEnd(20)}${C.reset}${C.cyan}${val}${C.reset}`);
 }
 
 function txLine(label: string, hash: string, explorerUrl: string) {
-  console.log(`${C.yellow}      ⛓  ${label}${C.reset}`);
-  console.log(`${C.gray}         hash:     ${C.reset}${hash}`);
-  console.log(`${C.gray}         explorer: ${C.reset}${explorerUrl}/tx/${hash}`);
+  console.log(`${C.yellow}         ⛓  ${label}${C.reset}`);
+  console.log(`${C.gray}            hash:     ${C.reset}${hash}`);
+  console.log(`${C.gray}            explorer: ${C.reset}${explorerUrl}/tx/${hash}`);
+}
+
+function apiResponse(lines: [string, string][]) {
+  blank();
+  console.log(`${C.green}         ┌─ API Response ────────────────────────────────${C.reset}`);
+  for (const [k, v] of lines) {
+    console.log(`${C.green}         │${C.reset}  ${C.gray}${k.padEnd(18)}${C.reset}${C.white}${v}${C.reset}`);
+  }
+  console.log(`${C.green}         └───────────────────────────────────────────────${C.reset}`);
+  blank();
 }
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Fake market data ─────────────────────────────────────────────────────────
+
+const TICKS = [
+  { price: "52.34", change: "+2.14%", vol: "18.2M" },
+  { price: "52.41", change: "+2.28%", vol: "18.5M" },
+  { price: "52.38", change: "+2.21%", vol: "18.3M" },
+  { price: "52.47", change: "+2.39%", vol: "18.7M" },
+];
+
+// ─── Artifact loader ──────────────────────────────────────────────────────────
 
 function loadArtifact(name: string) {
   const path = resolve(`artifacts/${name}.sol/${name}.json`);
@@ -104,48 +135,50 @@ export async function runDemo(cfg: DemoConfig) {
   console.clear();
   blank();
   console.log(`${C.bold}${C.cyan}${"═".repeat(68)}${C.reset}`);
-  console.log(`${C.bold}${C.cyan}       @xlayer/mpp — Machine Payments Protocol Demo${C.reset}`);
-  console.log(`${C.bold}${C.cyan}       HTTP 402 · EIP-712 · On-chain escrow · ${network.toUpperCase()}${C.reset}`);
+  console.log(`${C.bold}${C.cyan}  XLayer MPP — Machine Payments Protocol${C.reset}`);
+  console.log(`${C.bold}${C.cyan}  Autonomous agents paying APIs with USDC on XLayer${C.reset}`);
   console.log(`${C.bold}${C.cyan}${"═".repeat(68)}${C.reset}`);
   blank();
+  console.log(`${C.gray}  Actors${C.reset}`);
+  console.log(`${C.magenta}  agent  ${C.reset}${C.gray}—${C.reset}  Autonomous DeFi Agent  (needs market intelligence)`);
+  console.log(`${C.cyan}  oracle ${C.reset}${C.gray}—${C.reset}  XLayer DeFi Oracle API (sells on-chain data)`);
+  blank();
+  console.log(`${C.gray}  Network: XLayer ${network} · Chain ID ${chain.id}${C.reset}`);
 
   // ── Setup ──────────────────────────────────────────────────────────────────
 
-  header("SETUP");
+  header("SETUP — Spinning up oracle and agent wallets");
 
-  step("network", `Connecting to XLayer ${network}`);
+  step("rpc", `Connecting to XLayer ${network}`);
   await sleep(500);
 
   const block = await publicClient.getBlockNumber();
-  kv("Network:",  `${network} (Chain ID ${chain.id})`);
-  kv("RPC:",      rpcUrl);
-  kv("Block:",    String(block));
+  kv("RPC endpoint:", rpcUrl);
+  kv("Latest block:",  String(block));
   ok("Connected");
-  await sleep(600);
+  await sleep(500);
 
-  // Generate fresh client wallet for this demo session
-  step("wallets", "Generating demo wallets");
+  step("wallets", "Generating oracle (server) and agent (client) wallets");
   await sleep(400);
 
   const clientKey     = generatePrivateKey();
   const clientAccount = privateKeyToAccount(clientKey);
   const clientWallet  = createWalletClient({ account: clientAccount, chain, transport: http(rpcUrl) });
 
-  kv("Server:", serverAccount.address);
-  kv("Client:", clientAccount.address);
+  oracle(`address: ${serverAccount.address}`);
+  agent(`address:  ${clientAccount.address}`);
 
   const serverOKB = await publicClient.getBalance({ address: serverAccount.address });
-  kv("Server OKB:", `${formatUnits(serverOKB, 18)} OKB`);
+  kv("Oracle OKB:", `${formatUnits(serverOKB, 18)} OKB (covers gas)`);
 
   if (serverOKB === 0n) {
-    warn(`Server wallet has no OKB. Fund ${serverAccount.address} with OKB on ${network} and retry.`);
+    warn(`Oracle wallet has no OKB. Fund ${serverAccount.address} on ${network} and retry.`);
     process.exit(1);
   }
   ok("Wallets ready");
   await sleep(600);
 
-  // Fund client with OKB for gas
-  step("fund", "Sending OKB to client wallet for gas fees");
+  step("fund", "Oracle funds agent with OKB for gas (approve + open txs)");
   await sleep(400);
 
   const fundHash = await serverWallet.sendTransaction({
@@ -155,15 +188,14 @@ export async function runDemo(cfg: DemoConfig) {
     chain,
   });
   await publicClient.waitForTransactionReceipt({ hash: fundHash });
-  txLine("OKB transfer", fundHash, explorerUrl);
-  ok("Client funded with 0.0015 OKB");
+  txLine("OKB → agent", fundHash, explorerUrl);
+  ok("Agent funded with 0.0015 OKB");
   await sleep(600);
 
-  // Deploy MockERC20
-  step("token", "Deploying MockERC20 demo token (mints 100 tokens to client)");
+  step("token", "Minting demo USDC to agent (100 mUSDC)");
   await sleep(400);
 
-  const tokenSupply = parseUnits("100", 6);
+  const tokenSupply  = parseUnits("100", 6);
   const mockArtifact = loadArtifact("MockERC20");
   const mockAbi      = mockArtifact.abi as Parameters<typeof serverWallet.deployContract>[0]["abi"];
   const mockBytecode = mockArtifact.bytecode.object as Hex;
@@ -174,10 +206,10 @@ export async function runDemo(cfg: DemoConfig) {
   const mockReceipt = await publicClient.waitForTransactionReceipt({ hash: mockDeployHash });
   const tokenAddress = mockReceipt.contractAddress!;
 
-  txLine("MockERC20 deployed", mockDeployHash, explorerUrl);
-  kv("Token address:", tokenAddress);
-  kv("Client balance:", `${formatUnits(tokenSupply, 6)} mUSDC`);
-  ok("Demo token ready");
+  txLine("MockUSDC deployed", mockDeployHash, explorerUrl);
+  kv("Token:", tokenAddress);
+  agent(`balance: ${formatUnits(tokenSupply, 6)} USDC`);
+  ok("Agent has demo USDC");
   await sleep(600);
 
   // Deploy or use existing XLayerMPPChannel
@@ -185,30 +217,29 @@ export async function runDemo(cfg: DemoConfig) {
   if (!channelContract) {
     step("contract", "Deploying XLayerMPPChannel escrow contract");
     await sleep(400);
-    info("Compiling with via-ir optimizer...");
 
-    const chanArtifact = loadArtifact("XLayerMPPChannel");
-    const chanAbi      = chanArtifact.abi as Parameters<typeof serverWallet.deployContract>[0]["abi"];
-    const chanBytecode = chanArtifact.bytecode.object as Hex;
+    const chanArtifact  = loadArtifact("XLayerMPPChannel");
+    const chanAbi       = chanArtifact.abi as Parameters<typeof serverWallet.deployContract>[0]["abi"];
+    const chanBytecode  = chanArtifact.bytecode.object as Hex;
 
     const chanDeployHash = await serverWallet.deployContract({
       abi: chanAbi, bytecode: chanBytecode, args: [],
     });
-    const chanReceipt = await publicClient.waitForTransactionReceipt({ hash: chanDeployHash });
-    channelContract   = chanReceipt.contractAddress!;
+    const chanReceipt   = await publicClient.waitForTransactionReceipt({ hash: chanDeployHash });
+    channelContract     = chanReceipt.contractAddress!;
 
     txLine("XLayerMPPChannel deployed", chanDeployHash, explorerUrl);
-    kv("Contract address:", channelContract);
-    ok("Payment channel contract live");
+    kv("Escrow contract:", channelContract);
+    ok("Payment channel contract live on XLayer");
     await sleep(600);
   } else {
-    step("contract", "Using pre-deployed XLayerMPPChannel");
-    kv("Contract address:", channelContract);
+    step("contract", "XLayerMPPChannel already deployed");
+    kv("Escrow contract:", channelContract);
     ok("Ready");
     await sleep(400);
   }
 
-  const tokenBalance = async (account: Address) =>
+  const tokenBalance = async (account: Address): Promise<bigint> =>
     publicClient.readContract({
       address: tokenAddress,
       abi: [{ name: "balanceOf", type: "function", stateMutability: "view",
@@ -217,11 +248,13 @@ export async function runDemo(cfg: DemoConfig) {
       args: [account],
     }) as Promise<bigint>;
 
-  // ── CHARGE FLOW ────────────────────────────────────────────────────────────
+  // ── SCENARIO 1: CHARGE ─────────────────────────────────────────────────────
 
-  header("PAYMENT METHOD 1 — Charge (pay per request)");
-  info("Each API call issues HTTP 402. Client signs a transfer, server broadcasts.");
-  info("No API keys. No subscriptions. Payment IS the authentication.");
+  header("SCENARIO 1 — Spot Signal Request  (pay-per-call via HTTP 402)");
+
+  blank();
+  console.log(`${C.gray}  Agent wants a one-off market signal for OKB/USDC.${C.reset}`);
+  console.log(`${C.gray}  No API key. No account. Payment unlocks the response.${C.reset}`);
   blank();
 
   const chargeStore  = createMemoryStore();
@@ -240,73 +273,91 @@ export async function runDemo(cfg: DemoConfig) {
     rpcUrl,
   });
 
-  step(1, "Server issues HTTP 402 challenge");
+  step("402", "Agent → POST /api/signal/OKB-USDC");
   await sleep(700);
+
+  agent("POST /api/signal/OKB-USDC  HTTP/1.1");
+  await sleep(400);
 
   const chargeChallenge = await chargeServer.createChallenge({
     amount:      "1",
     currency:    "USDC",
     recipient:   serverAccount.address,
-    description: "Access to /api/generate",
+    description: "OKB/USDC spot signal — XLayer DeFi Oracle",
   });
   chargeChallenge.methodDetails.tokenAddress = tokenAddress;
 
-  kv("amount:",     "1 mUSDC");
-  kv("recipient:",  serverAccount.address);
+  oracle("HTTP 402 Payment Required");
+  kv("cost:",       "1 mUSDC");
+  kv("endpoint:",   "POST /api/signal/OKB-USDC");
   kv("reference:",  chargeChallenge.methodDetails.reference);
-  ok("402 challenge issued");
   await sleep(600);
 
-  step(2, "Client signs transfer (does NOT broadcast — server pays gas)");
+  step("sign", "Agent signs payment credential (oracle will broadcast — agent pays no gas)");
   await sleep(700);
 
-  const serverBefore   = await tokenBalance(serverAccount.address);
-  const clientBefore   = await tokenBalance(clientAccount.address);
+  const oracleBefore = await tokenBalance(serverAccount.address);
+  const agentBefore  = await tokenBalance(clientAccount.address);
 
   const chargeCredential = await chargeClient.handleChallenge(chargeChallenge);
-  ok(`Signed tx: ${chargeCredential.transaction.slice(0, 34)}...`);
+  agent(`signed tx:  ${chargeCredential.transaction.slice(0, 42)}...`);
+  ok("Credential signed — no broadcast yet");
   await sleep(500);
 
-  step(3, "Server broadcasts & verifies Transfer event on-chain");
+  step("pay", "Oracle broadcasts transfer & verifies on-chain");
   await sleep(700);
 
   const chargeReceipt = await chargeServer.handleCredential(chargeChallenge, chargeCredential);
-  txLine("Payment confirmed", chargeReceipt.txHash, explorerUrl);
-  ok(`Block: ${chargeReceipt.blockNumber}`);
+  txLine("USDC transfer confirmed", chargeReceipt.txHash, explorerUrl);
+  ok(`Included in block ${chargeReceipt.blockNumber}`);
+  await sleep(600);
+
+  step("response", "Payment confirmed — API response unlocked");
   await sleep(500);
 
-  step(4, "Balance verification");
+  apiResponse([
+    ["pair:",        "OKB / USDC"],
+    ["price:",       `${TICKS[0]!.price} USDC`],
+    ["24h change:",  TICKS[0]!.change],
+    ["volume:",      `${TICKS[0]!.vol} USDC`],
+    ["signal:",      "ACCUMULATE ▲"],
+    ["confidence:",  "87%"],
+    ["cost:",        "1 mUSDC  ✓ paid"],
+  ]);
+
+  const oracleAfter = await tokenBalance(serverAccount.address);
+  const agentAfter  = await tokenBalance(clientAccount.address);
+
+  oracle(`received: +${formatUnits(oracleAfter - oracleBefore, 6)} USDC`);
+  agent(`spent:    -${formatUnits(agentBefore - agentAfter, 6)} USDC`);
   await sleep(500);
 
-  const serverAfterCharge = await tokenBalance(serverAccount.address);
-  const clientAfterCharge = await tokenBalance(clientAccount.address);
-
-  kv("Server received:", `+${formatUnits(serverAfterCharge - serverBefore, 6)} mUSDC`);
-  kv("Client spent:",    `-${formatUnits(clientBefore - clientAfterCharge, 6)} mUSDC`);
-
-  step(5, "Replay protection — same credential rejected");
-  await sleep(700);
+  step("replay", "Agent replays the same credential → rejected");
+  await sleep(600);
 
   try {
     await chargeServer.handleCredential(chargeChallenge, chargeCredential);
     warn("BUG: replay accepted!");
   } catch {
-    ok("Duplicate credential correctly rejected");
+    ok("Duplicate credential rejected — reference already spent");
   }
 
   blank();
-  console.log(`${C.green}${C.bold}  ✅  Charge flow complete${C.reset}`);
-  await sleep(1000);
+  console.log(`${C.green}${C.bold}  ✅  Scenario 1 complete — 1 mUSDC paid, 0 gas spent by agent${C.reset}`);
+  await sleep(1200);
 
-  // ── SESSION FLOW ───────────────────────────────────────────────────────────
+  // ── SCENARIO 2: SESSION ────────────────────────────────────────────────────
 
-  header("PAYMENT METHOD 2 — Session (metered / streaming)");
-  info("Open a channel once (on-chain deposit). Every request = EIP-712 signature.");
-  info("Zero gas per request. Server settles with final voucher at end.");
+  header("SCENARIO 2 — Live Price Stream  (metered session via payment channel)");
+
+  blank();
+  console.log(`${C.gray}  Agent subscribes to a live XLayer price feed.${C.reset}`);
+  console.log(`${C.gray}  One on-chain deposit. Every price tick = EIP-712 signature — zero gas.${C.reset}`);
+  console.log(`${C.gray}  Oracle settles the final cumulative amount on-chain when session ends.${C.reset}`);
   blank();
 
   const sessionStore  = createMemoryStore();
-  const PER_REQ       = parseUnits("1", 6);
+  const PER_TICK      = parseUnits("1", 6);
 
   const sessionServer = new XLayerSessionServer({
     recipient:              serverAccount.address,
@@ -328,57 +379,73 @@ export async function runDemo(cfg: DemoConfig) {
     depositMultiplier:      10,
   });
 
-  const serverBeforeSession = await tokenBalance(serverAccount.address);
-  const clientBeforeSession = await tokenBalance(clientAccount.address);
+  const oracleBeforeSession = await tokenBalance(serverAccount.address);
+  const agentBeforeSession  = await tokenBalance(clientAccount.address);
 
-  // Open
-  step("open", "Client opens payment channel — deposits 10 mUSDC into escrow");
-  info(`XLayerMPPChannel: ${channelContract}`);
-  await sleep(700);
+  // Open channel
+  step("open", "Agent opens payment channel — deposits 10 USDC into escrow");
+  blank();
+  agent("POST /api/stream/subscribe  HTTP/1.1");
+  await sleep(500);
 
   const openChallenge  = await sessionServer.createChallenge({ amount: "1", asset: tokenAddress });
-  const openCredential = await sessionClient.handleChallenge(openChallenge, PER_REQ);
-  info("Broadcasting approve() + open()...");
+  oracle("HTTP 402 Payment Required  (open channel first)");
+  kv("contract:", channelContract);
+  kv("deposit:",  "10 mUSDC (covers 10 ticks upfront)");
+  await sleep(500);
+
+  info("Agent calls approve() + XLayerMPPChannel.open() on-chain...");
+  const openCredential = await sessionClient.handleChallenge(openChallenge, PER_TICK);
   await sleep(400);
 
-  const openReceipt = await sessionServer.handleCredential(openChallenge, openCredential);
-  txLine("Channel opened (open tx)", openCredential.depositTxHash!, explorerUrl);
-  kv("Channel ID:", openReceipt.channelId);
+  const openReceipt    = await sessionServer.handleCredential(openChallenge, openCredential);
+  txLine("Channel opened", openCredential.depositTxHash!, explorerUrl);
+  kv("channel ID:",    openReceipt.channelId);
 
-  const escrowBalance = await tokenBalance(channelContract);
-  kv("Escrow balance:", `${formatUnits(escrowBalance, 6)} mUSDC locked in contract`);
-  ok("Channel open — funds are in escrow");
-  await sleep(700);
+  const escrow = await tokenBalance(channelContract);
+  kv("escrow:",        `${formatUnits(escrow, 6)} USDC locked in XLayerMPPChannel`);
+  oracle("Channel open — streaming begins");
+  ok("10 USDC in escrow · agent can now stream ticks off-chain");
+  await sleep(800);
 
-  // Update requests
-  step("update", "3 API requests served — off-chain EIP-712 only, zero gas");
+  // Price ticks
+  step("stream", "Live OKB/USDC price ticks — EIP-712 signatures, zero gas");
   blank();
 
+  const labels = ["open", "tick 1", "tick 2", "tick 3"];
   for (let i = 1; i <= 3; i++) {
-    await sleep(600);
+    await sleep(800);
+
+    const tick = TICKS[i]!;
     const updChallenge  = await sessionServer.createChallenge({
       channelId: openReceipt.channelId,
       amount:    "1",
       asset:     tokenAddress,
     });
-    const updCredential = await sessionClient.handleChallenge(updChallenge, PER_REQ);
+    const updCredential = await sessionClient.handleChallenge(updChallenge, PER_TICK);
     const updReceipt    = await sessionServer.handleCredential(updChallenge, updCredential);
 
     console.log(
-      `${C.gray}      Request ${i}${C.reset}  ` +
+      `${C.cyan}  [${labels[i]!}]${C.reset}  ` +
+      `OKB/USDC ${C.white}${tick.price}${C.reset}  ` +
+      `${C.green}${tick.change}${C.reset}  ` +
+      `vol ${C.gray}${tick.vol}${C.reset}  ` +
+      `${C.gray}│${C.reset}  ` +
       `seq=${C.cyan}${updReceipt.sequence}${C.reset}  ` +
-      `cumulative=${C.yellow}${formatUnits(BigInt(updReceipt.authorizedAmount), 6)} mUSDC${C.reset}  ` +
+      `cumulative=${C.yellow}${formatUnits(BigInt(updReceipt.authorizedAmount), 6)} USDC${C.reset}  ` +
       `${C.green}⚡ no tx${C.reset}`
     );
   }
 
   blank();
-  ok("3 requests served — zero on-chain transactions");
-  await sleep(700);
+  ok("3 ticks streamed — zero on-chain transactions");
+  await sleep(800);
 
   // Close + settle
-  step("close", "Client closes — server calls contract.settle() on-chain");
-  await sleep(700);
+  step("settle", "Agent closes session — oracle calls contract.settle() on-chain");
+  blank();
+  agent("POST /api/stream/close");
+  await sleep(600);
 
   const closeChallenge  = await sessionServer.createChallenge({
     channelId: openReceipt.channelId,
@@ -386,45 +453,55 @@ export async function runDemo(cfg: DemoConfig) {
     asset:     tokenAddress,
   });
   const closeCredential = await sessionClient.closeChannel(closeChallenge);
-  info("Server broadcasting settle()...");
-  await sleep(400);
+
+  oracle("Final voucher received — broadcasting settle() to XLayerMPPChannel...");
+  await sleep(500);
 
   const closeReceipt = await sessionServer.handleCredential(closeChallenge, closeCredential);
   txLine("Settlement confirmed", closeReceipt.settleTxHash!, explorerUrl);
-  kv("Settled amount:", `${formatUnits(BigInt(closeReceipt.authorizedAmount), 6)} mUSDC`);
+
+  const settled  = BigInt(closeReceipt.authorizedAmount);
+  const deposited = PER_TICK * 10n;
+  kv("settled:",   `${formatUnits(settled, 6)} USDC  → oracle`);
+  kv("refunded:",  `${formatUnits(deposited - settled, 6)} USDC  → agent`);
   await sleep(600);
 
-  // Final balances
-  step("result", "Final balance check");
-  await sleep(500);
+  step("result", "Final balances");
+  await sleep(400);
 
-  const serverAfterSession = await tokenBalance(serverAccount.address);
-  const clientAfterSession = await tokenBalance(clientAccount.address);
+  const oracleAfterSession = await tokenBalance(serverAccount.address);
+  const agentAfterSession  = await tokenBalance(clientAccount.address);
   const escrowAfter        = await tokenBalance(channelContract);
 
-  kv("Server earned:",   `+${formatUnits(serverAfterSession - serverBeforeSession, 6)} mUSDC (4 × 1 mUSDC)`);
-  kv("Client net cost:", `-${formatUnits(clientBeforeSession - clientAfterSession, 6)} mUSDC (6 refunded)`);
-  kv("Escrow balance:",  `${formatUnits(escrowAfter, 6)} mUSDC (empty after settle)`);
+  oracle(`earned:   +${formatUnits(oracleAfterSession - oracleBeforeSession, 6)} USDC  (open + 3 ticks)`);
+  agent(`net cost: -${formatUnits(agentBeforeSession - agentAfterSession, 6)} USDC  (6 USDC refunded)`);
+  kv("escrow:",    `${formatUnits(escrowAfter, 6)} USDC  (empty — settlement complete)`);
 
   blank();
-  console.log(`${C.green}${C.bold}  ✅  Session flow complete${C.reset}`);
+  console.log(`${C.green}${C.bold}  ✅  Scenario 2 complete — 4 ticks · 1 on-chain open · 1 on-chain settle${C.reset}`);
   await sleep(500);
 
   // ── Summary ────────────────────────────────────────────────────────────────
 
   sep();
   blank();
-  console.log(`${C.bold}${C.green}  🎉  ALL FLOWS COMPLETE — XLayer ${network.toUpperCase()}${C.reset}`);
+  console.log(`${C.bold}${C.green}  🎉  Demo complete — XLayer ${network.toUpperCase()}${C.reset}`);
   blank();
-  console.log(`${C.bold}  What was demonstrated:${C.reset}`);
-  console.log(`${C.gray}  ① Charge  — HTTP 402 → client signs → server broadcasts & verifies${C.reset}`);
-  console.log(`${C.gray}              Replay protection via challenge reference${C.reset}`);
-  console.log(`${C.gray}  ② Session — USDC deposited to XLayerMPPChannel escrow (1 on-chain tx)${C.reset}`);
-  console.log(`${C.gray}              3 requests served with EIP-712 signatures — no gas per call${C.reset}`);
-  console.log(`${C.gray}              Server calls settle() → funds distributed from escrow${C.reset}`);
+  console.log(`${C.bold}  What was shown:${C.reset}`);
   blank();
-  kv("Channel contract:", channelContract);
-  kv("Explorer:",         explorerUrl);
+  console.log(`${C.cyan}  Scenario 1 — Pay-per-call (Charge)${C.reset}`);
+  console.log(`${C.gray}    Agent POST /api/signal/OKB-USDC → HTTP 402 → signs USDC transfer${C.reset}`);
+  console.log(`${C.gray}    Oracle broadcasts on-chain, verifies Transfer, unlocks response${C.reset}`);
+  console.log(`${C.gray}    Replay attack blocked by challenge reference${C.reset}`);
+  blank();
+  console.log(`${C.cyan}  Scenario 2 — Metered stream (Session)${C.reset}`);
+  console.log(`${C.gray}    Agent deposits USDC into XLayerMPPChannel escrow (1 tx)${C.reset}`);
+  console.log(`${C.gray}    3 price ticks served via EIP-712 vouchers — no gas per tick${C.reset}`);
+  console.log(`${C.gray}    Oracle settles final cumulative amount on-chain (1 tx)${C.reset}`);
+  console.log(`${C.gray}    Remainder refunded from escrow to agent automatically${C.reset}`);
+  blank();
+  kv("Escrow contract:", channelContract);
+  kv("Explorer:",        explorerUrl);
   blank();
   sep();
 }
