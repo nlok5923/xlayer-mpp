@@ -140,33 +140,40 @@ export async function runDemo(cfg: DemoConfig) {
   console.log(`${C.bold}${C.cyan}${"═".repeat(68)}${C.reset}`);
   blank();
   console.log(`${C.gray}  Actors${C.reset}`);
+  await sleep(600);
   console.log(`${C.magenta}  agent  ${C.reset}${C.gray}—${C.reset}  Autonomous DeFi Agent  (needs market intelligence)`);
+  await sleep(600);
   console.log(`${C.cyan}  oracle ${C.reset}${C.gray}—${C.reset}  XLayer DeFi Oracle API (sells on-chain data)`);
   blank();
   console.log(`${C.gray}  Network: XLayer ${network} · Chain ID ${chain.id}${C.reset}`);
+  await sleep(2500);
 
   // ── Setup ──────────────────────────────────────────────────────────────────
 
   header("SETUP — Spinning up oracle and agent wallets");
 
   step("rpc", `Connecting to XLayer ${network}`);
-  await sleep(500);
+  await sleep(1000);
 
   const block = await publicClient.getBlockNumber();
   kv("RPC endpoint:", rpcUrl);
+  await sleep(400);
   kv("Latest block:",  String(block));
+  await sleep(400);
   ok("Connected");
-  await sleep(500);
+  await sleep(1200);
 
   step("wallets", "Generating oracle (server) and agent (client) wallets");
-  await sleep(400);
+  await sleep(1000);
 
   const clientKey     = generatePrivateKey();
   const clientAccount = privateKeyToAccount(clientKey);
   const clientWallet  = createWalletClient({ account: clientAccount, chain, transport: http(rpcUrl) });
 
   oracle(`address: ${serverAccount.address}`);
+  await sleep(600);
   agent(`address:  ${clientAccount.address}`);
+  await sleep(600);
 
   const serverOKB = await publicClient.getBalance({ address: serverAccount.address });
   kv("Oracle OKB:", `${formatUnits(serverOKB, 18)} OKB (covers gas)`);
@@ -175,11 +182,12 @@ export async function runDemo(cfg: DemoConfig) {
     warn(`Oracle wallet has no OKB. Fund ${serverAccount.address} on ${network} and retry.`);
     process.exit(1);
   }
+  await sleep(400);
   ok("Wallets ready");
-  await sleep(600);
+  await sleep(1200);
 
   step("fund", "Oracle funds agent with OKB for gas (approve + open txs)");
-  await sleep(400);
+  await sleep(1000);
 
   const fundHash = await serverWallet.sendTransaction({
     account: serverAccount,
@@ -189,11 +197,12 @@ export async function runDemo(cfg: DemoConfig) {
   });
   await publicClient.waitForTransactionReceipt({ hash: fundHash });
   txLine("OKB → agent", fundHash, explorerUrl);
+  await sleep(800);
   ok("Agent funded with 0.0015 OKB");
-  await sleep(600);
+  await sleep(1500);
 
   step("token", "Minting demo USDC to agent (100 mUSDC)");
-  await sleep(400);
+  await sleep(1000);
 
   const tokenSupply  = parseUnits("100", 6);
   const mockArtifact = loadArtifact("MockERC20");
@@ -207,16 +216,19 @@ export async function runDemo(cfg: DemoConfig) {
   const tokenAddress = mockReceipt.contractAddress!;
 
   txLine("MockUSDC deployed", mockDeployHash, explorerUrl);
-  kv("Token:", tokenAddress);
-  agent(`balance: ${formatUnits(tokenSupply, 6)} USDC`);
-  ok("Agent has demo USDC");
   await sleep(600);
+  kv("Token:", tokenAddress);
+  await sleep(400);
+  agent(`balance: ${formatUnits(tokenSupply, 6)} USDC`);
+  await sleep(400);
+  ok("Agent has demo USDC");
+  await sleep(1500);
 
   // Deploy or use existing XLayerMPPChannel
   let channelContract = cfg.channelContract;
   if (!channelContract) {
     step("contract", "Deploying XLayerMPPChannel escrow contract");
-    await sleep(400);
+    await sleep(1000);
 
     const chanArtifact  = loadArtifact("XLayerMPPChannel");
     const chanAbi       = chanArtifact.abi as Parameters<typeof serverWallet.deployContract>[0]["abi"];
@@ -229,14 +241,18 @@ export async function runDemo(cfg: DemoConfig) {
     channelContract     = chanReceipt.contractAddress!;
 
     txLine("XLayerMPPChannel deployed", chanDeployHash, explorerUrl);
-    kv("Escrow contract:", channelContract);
-    ok("Payment channel contract live on XLayer");
     await sleep(600);
+    kv("Escrow contract:", channelContract);
+    await sleep(400);
+    ok("Payment channel contract live on XLayer");
+    await sleep(1500);
   } else {
     step("contract", "XLayerMPPChannel already deployed");
+    await sleep(800);
     kv("Escrow contract:", channelContract);
-    ok("Ready");
     await sleep(400);
+    ok("Ready");
+    await sleep(1200);
   }
 
   const tokenBalance = async (account: Address): Promise<bigint> =>
@@ -254,8 +270,10 @@ export async function runDemo(cfg: DemoConfig) {
 
   blank();
   console.log(`${C.gray}  Agent wants a one-off market signal for OKB/USDC.${C.reset}`);
+  await sleep(700);
   console.log(`${C.gray}  No API key. No account. Payment unlocks the response.${C.reset}`);
   blank();
+  await sleep(1500);
 
   const chargeStore  = createMemoryStore();
   const PAY_AMOUNT   = parseUnits("1", 6);
@@ -274,10 +292,10 @@ export async function runDemo(cfg: DemoConfig) {
   });
 
   step("402", "Agent → POST /api/signal/OKB-USDC");
-  await sleep(700);
+  await sleep(1200);
 
   agent("POST /api/signal/OKB-USDC  HTTP/1.1");
-  await sleep(400);
+  await sleep(1000);
 
   const chargeChallenge = await chargeServer.createChallenge({
     amount:      "1",
@@ -288,32 +306,37 @@ export async function runDemo(cfg: DemoConfig) {
   chargeChallenge.methodDetails.tokenAddress = tokenAddress;
 
   oracle("HTTP 402 Payment Required");
+  await sleep(500);
   kv("cost:",       "1 mUSDC");
+  await sleep(400);
   kv("endpoint:",   "POST /api/signal/OKB-USDC");
+  await sleep(400);
   kv("reference:",  chargeChallenge.methodDetails.reference);
-  await sleep(600);
+  await sleep(1500);
 
   step("sign", "Agent signs payment credential (oracle will broadcast — agent pays no gas)");
-  await sleep(700);
+  await sleep(1200);
 
   const oracleBefore = await tokenBalance(serverAccount.address);
   const agentBefore  = await tokenBalance(clientAccount.address);
 
   const chargeCredential = await chargeClient.handleChallenge(chargeChallenge);
   agent(`signed tx:  ${chargeCredential.transaction.slice(0, 42)}...`);
+  await sleep(600);
   ok("Credential signed — no broadcast yet");
-  await sleep(500);
+  await sleep(1500);
 
   step("pay", "Oracle broadcasts transfer & verifies on-chain");
-  await sleep(700);
+  await sleep(1200);
 
   const chargeReceipt = await chargeServer.handleCredential(chargeChallenge, chargeCredential);
   txLine("USDC transfer confirmed", chargeReceipt.txHash, explorerUrl);
+  await sleep(800);
   ok(`Included in block ${chargeReceipt.blockNumber}`);
-  await sleep(600);
+  await sleep(1500);
 
   step("response", "Payment confirmed — API response unlocked");
-  await sleep(500);
+  await sleep(1200);
 
   apiResponse([
     ["pair:",        "OKB / USDC"],
@@ -324,16 +347,18 @@ export async function runDemo(cfg: DemoConfig) {
     ["confidence:",  "87%"],
     ["cost:",        "1 mUSDC  ✓ paid"],
   ]);
+  await sleep(1500);
 
   const oracleAfter = await tokenBalance(serverAccount.address);
   const agentAfter  = await tokenBalance(clientAccount.address);
 
   oracle(`received: +${formatUnits(oracleAfter - oracleBefore, 6)} USDC`);
+  await sleep(600);
   agent(`spent:    -${formatUnits(agentBefore - agentAfter, 6)} USDC`);
-  await sleep(500);
+  await sleep(1500);
 
   step("replay", "Agent replays the same credential → rejected");
-  await sleep(600);
+  await sleep(1200);
 
   try {
     await chargeServer.handleCredential(chargeChallenge, chargeCredential);
@@ -343,8 +368,9 @@ export async function runDemo(cfg: DemoConfig) {
   }
 
   blank();
+  await sleep(800);
   console.log(`${C.green}${C.bold}  ✅  Scenario 1 complete — 1 mUSDC paid, 0 gas spent by agent${C.reset}`);
-  await sleep(1200);
+  await sleep(3000);
 
   // ── SCENARIO 2: SESSION ────────────────────────────────────────────────────
 
@@ -352,9 +378,12 @@ export async function runDemo(cfg: DemoConfig) {
 
   blank();
   console.log(`${C.gray}  Agent subscribes to a live XLayer price feed.${C.reset}`);
+  await sleep(800);
   console.log(`${C.gray}  One on-chain deposit. Every price tick = EIP-712 signature — zero gas.${C.reset}`);
+  await sleep(800);
   console.log(`${C.gray}  Oracle settles the final cumulative amount on-chain when session ends.${C.reset}`);
   blank();
+  await sleep(1500);
 
   const sessionStore  = createMemoryStore();
   const PER_TICK      = parseUnits("1", 6);
@@ -385,36 +414,44 @@ export async function runDemo(cfg: DemoConfig) {
   // Open channel
   step("open", "Agent opens payment channel — deposits 10 USDC into escrow");
   blank();
+  await sleep(1000);
   agent("POST /api/stream/subscribe  HTTP/1.1");
-  await sleep(500);
+  await sleep(1000);
 
   const openChallenge  = await sessionServer.createChallenge({ amount: "1", asset: tokenAddress });
   oracle("HTTP 402 Payment Required  (open channel first)");
-  kv("contract:", channelContract);
-  kv("deposit:",  "10 mUSDC (covers 10 ticks upfront)");
   await sleep(500);
+  kv("contract:", channelContract);
+  await sleep(400);
+  kv("deposit:",  "10 mUSDC (covers 10 ticks upfront)");
+  await sleep(1200);
 
   info("Agent calls approve() + XLayerMPPChannel.open() on-chain...");
   const openCredential = await sessionClient.handleChallenge(openChallenge, PER_TICK);
-  await sleep(400);
+  await sleep(600);
 
   const openReceipt    = await sessionServer.handleCredential(openChallenge, openCredential);
   txLine("Channel opened", openCredential.depositTxHash!, explorerUrl);
+  await sleep(800);
   kv("channel ID:",    openReceipt.channelId);
+  await sleep(400);
 
   const escrow = await tokenBalance(channelContract);
   kv("escrow:",        `${formatUnits(escrow, 6)} USDC locked in XLayerMPPChannel`);
+  await sleep(600);
   oracle("Channel open — streaming begins");
+  await sleep(400);
   ok("10 USDC in escrow · agent can now stream ticks off-chain");
-  await sleep(800);
+  await sleep(1500);
 
   // Price ticks
   step("stream", "Live OKB/USDC price ticks — EIP-712 signatures, zero gas");
   blank();
+  await sleep(1000);
 
   const labels = ["open", "tick 1", "tick 2", "tick 3"];
   for (let i = 1; i <= 3; i++) {
-    await sleep(800);
+    await sleep(2000);
 
     const tick = TICKS[i]!;
     const updChallenge  = await sessionServer.createChallenge({
@@ -438,14 +475,16 @@ export async function runDemo(cfg: DemoConfig) {
   }
 
   blank();
+  await sleep(600);
   ok("3 ticks streamed — zero on-chain transactions");
-  await sleep(800);
+  await sleep(1800);
 
   // Close + settle
   step("settle", "Agent closes session — oracle calls contract.settle() on-chain");
   blank();
+  await sleep(1000);
   agent("POST /api/stream/close");
-  await sleep(600);
+  await sleep(1000);
 
   const closeChallenge  = await sessionServer.createChallenge({
     channelId: openReceipt.channelId,
@@ -455,31 +494,36 @@ export async function runDemo(cfg: DemoConfig) {
   const closeCredential = await sessionClient.closeChannel(closeChallenge);
 
   oracle("Final voucher received — broadcasting settle() to XLayerMPPChannel...");
-  await sleep(500);
+  await sleep(1000);
 
   const closeReceipt = await sessionServer.handleCredential(closeChallenge, closeCredential);
   txLine("Settlement confirmed", closeReceipt.settleTxHash!, explorerUrl);
+  await sleep(1000);
 
-  const settled  = BigInt(closeReceipt.authorizedAmount);
+  const settled   = BigInt(closeReceipt.authorizedAmount);
   const deposited = PER_TICK * 10n;
   kv("settled:",   `${formatUnits(settled, 6)} USDC  → oracle`);
+  await sleep(500);
   kv("refunded:",  `${formatUnits(deposited - settled, 6)} USDC  → agent`);
-  await sleep(600);
+  await sleep(1500);
 
   step("result", "Final balances");
-  await sleep(400);
+  await sleep(1200);
 
   const oracleAfterSession = await tokenBalance(serverAccount.address);
   const agentAfterSession  = await tokenBalance(clientAccount.address);
   const escrowAfter        = await tokenBalance(channelContract);
 
   oracle(`earned:   +${formatUnits(oracleAfterSession - oracleBeforeSession, 6)} USDC  (open + 3 ticks)`);
+  await sleep(700);
   agent(`net cost: -${formatUnits(agentBeforeSession - agentAfterSession, 6)} USDC  (6 USDC refunded)`);
+  await sleep(700);
   kv("escrow:",    `${formatUnits(escrowAfter, 6)} USDC  (empty — settlement complete)`);
 
   blank();
+  await sleep(1000);
   console.log(`${C.green}${C.bold}  ✅  Scenario 2 complete — 4 ticks · 1 on-chain open · 1 on-chain settle${C.reset}`);
-  await sleep(500);
+  await sleep(2000);
 
   // ── Summary ────────────────────────────────────────────────────────────────
 
@@ -487,20 +531,32 @@ export async function runDemo(cfg: DemoConfig) {
   blank();
   console.log(`${C.bold}${C.green}  🎉  Demo complete — XLayer ${network.toUpperCase()}${C.reset}`);
   blank();
+  await sleep(800);
   console.log(`${C.bold}  What was shown:${C.reset}`);
   blank();
+  await sleep(800);
   console.log(`${C.cyan}  Scenario 1 — Pay-per-call (Charge)${C.reset}`);
+  await sleep(500);
   console.log(`${C.gray}    Agent POST /api/signal/OKB-USDC → HTTP 402 → signs USDC transfer${C.reset}`);
+  await sleep(500);
   console.log(`${C.gray}    Oracle broadcasts on-chain, verifies Transfer, unlocks response${C.reset}`);
+  await sleep(500);
   console.log(`${C.gray}    Replay attack blocked by challenge reference${C.reset}`);
   blank();
+  await sleep(800);
   console.log(`${C.cyan}  Scenario 2 — Metered stream (Session)${C.reset}`);
+  await sleep(500);
   console.log(`${C.gray}    Agent deposits USDC into XLayerMPPChannel escrow (1 tx)${C.reset}`);
+  await sleep(500);
   console.log(`${C.gray}    3 price ticks served via EIP-712 vouchers — no gas per tick${C.reset}`);
+  await sleep(500);
   console.log(`${C.gray}    Oracle settles final cumulative amount on-chain (1 tx)${C.reset}`);
+  await sleep(500);
   console.log(`${C.gray}    Remainder refunded from escrow to agent automatically${C.reset}`);
   blank();
+  await sleep(800);
   kv("Escrow contract:", channelContract);
+  await sleep(400);
   kv("Explorer:",        explorerUrl);
   blank();
   sep();
